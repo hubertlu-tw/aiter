@@ -36,6 +36,12 @@ def tensor_model_parallel_fused_allreduce_rmsnorm(
     return get_tp_group().fused_allreduce_rmsnorm(input_, weight_, eps)
 
 
+def tensor_model_parallel_fused_allreduce_residual_rmsnorm(
+    input_: torch.Tensor, residual_: torch.Tensor, weight_: torch.Tensor, eps: float
+) -> tuple[torch.Tensor, torch.Tensor]:
+    return get_tp_group().fused_allreduce_residual_rmsnorm(input_, residual_, weight_, eps)
+
+
 def tensor_model_parallel_custom_all_gather(input_: torch.Tensor) -> torch.Tensor:
     return get_tp_group().custom_all_gather(input_)
 

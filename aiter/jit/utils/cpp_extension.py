@@ -1403,6 +1403,9 @@ def _prepare_ldflags(
 
         if is_standalone:
             extra_ldflags.append(f"-Wl,-rpath,{TORCH_LIB_PATH}")
+        else:
+            # Always add RPATH for PyTorch libraries for Python modules too
+            extra_ldflags.append(f"-Wl,-rpath,{TORCH_LIB_PATH}")
 
     if with_cuda and IS_HIP_EXTENSION:
         if verbose:

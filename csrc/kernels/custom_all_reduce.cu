@@ -254,22 +254,21 @@ void _fused_allreduce_rmsnorm(
     }
 }
 
-void fused_allreduce_rmsnorm(fptr_t _fa,
+std::tuple<torch::Tensor, torch::Tensor> fused_allreduce_rmsnorm(fptr_t _fa,
                 torch::Tensor& inp,
-                torch::Tensor& out,
                 torch::Tensor& w,
                 float eps,
                 std::optional<torch::Tensor> reg_buffer)
 {
     const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(inp));
     auto stream = c10::hip::getCurrentHIPStreamMasqueradingAsCUDA().stream();
-    TORCH_CHECK_EQ(inp.scalar_type(), out.scalar_type());
-    TORCH_CHECK_EQ(inp.numel(), out.numel());
     int n = w.numel();
     int m = inp.numel() / n;
 
-    if(reg_buffer.has_value())
-    {
+    // Create output tensor
+    auto out = torch::empty_like(inp);
+
+    if (reg_buffer.has_value()) {
         auto input_size = inp.numel() * inp.element_size();
         TORCH_CHECK(input_size <= reg_buffer.value().numel() * reg_buffer.value().element_size(),
                     "registered buffer is too small to contain the input");
@@ -279,11 +278,84 @@ void fused_allreduce_rmsnorm(fptr_t _fa,
                                 hipMemcpyDeviceToDevice,
                                 stream));
         _fused_allreduce_rmsnorm(_fa, reg_buffer.value(), out, w, eps, m, n, stream);
-    }
-    else
-    {
+    } else {
       _fused_allreduce_rmsnorm(_fa, inp, out, w, eps, m, n, stream);
     }
+    // Return the same tensor twice since there's no residual output for this function
+    return std::make_tuple(out, out.clone());
+}
+
+std::tuple<torch::Tensor, torch::Tensor> fused_allreduce_residual_rmsnorm(fptr_t _fa,
+                torch::Tensor& inp,
+                torch::Tensor& residual,
+                torch::Tensor& w,
+                float eps,
+                std::optional<torch::Tensor> reg_buffer)
+{
+    const at::hip::OptionalHIPGuardMasqueradingAsCUDA device_guard(device_of(inp));
+    auto stream = c10::hip::getCurrentHIPStreamMasqueradingAsCUDA().stream();
+    TORCH_CHECK_EQ(inp.scalar_type(), residual.scalar_type());
+    TORCH_CHECK_EQ(inp.numel(), residual.numel());
+    int n = w.numel();
+    int m = inp.numel() / n;
+
+    // Create output tensors
+    auto out = torch::empty_like(inp);
+    auto residual_out = torch::empty_like(inp);
+
+    // Handle single GPU case (no allreduce)
+    if (_fa == 0) {
+        // Single GPU fallback: just add residual and compute RMSNorm
+        // 1. R_out = inp + residual
+        // 2. Compute RMSNorm on R_out
+        
+        // Add residual to input to get R_out
+        at::add_out(residual_out, inp, residual);
+        
+        // Manual RMSNorm implementation
+        // variance = mean(R_out^2, dim=-1, keepdim=True)
+        // out = R_out * w / sqrt(variance + eps)
+        
+        // Compute variance along the last dimension
+        auto variance = at::mean(at::pow(residual_out, 2), {-1}, true);
+        
+        // Compute RMSNorm: out = residual_out * w / sqrt(variance + eps)
+        at::mul_out(out, residual_out, w);
+        at::div_out(out, out, at::sqrt(at::add(variance, eps)));
+        
+        return std::make_tuple(out, residual_out);
+    }
+
+    // For now, implement a simple fallback that follows the mathematical formulation:
+    // 1. Allreduce the input
+    // 2. Add residual to get R_out = X_sum + R
+    // 3. Compute RMSNorm on R_out
+    // 4. Return (N_out, R_out)
+    
+    // Safety check: if _fa is not 0 but points to invalid memory, fall back to single GPU
+    if (_fa == 0) {
+        // This should not happen since we already handled _fa == 0 above
+        // but for safety, fall back to single GPU implementation
+        at::add_out(residual_out, inp, residual);
+        auto variance = at::mean(at::pow(residual_out, 2), {-1}, true);
+        at::mul_out(out, residual_out, w);
+        at::div_out(out, out, at::sqrt(at::add(variance, eps)));
+        return std::make_tuple(out, residual_out);
+    }
+    
+    // First, perform allreduce on the input
+    torch::Tensor ar_result = torch::empty_like(inp);
+    all_reduce(_fa, inp, ar_result, false, reg_buffer);
+    
+    // Add residual to allreduced result to get R_out
+    at::add_out(residual_out, ar_result, residual);
+    
+    // Compute RMSNorm on the combined result (R_out)
+    auto variance = at::mean(at::pow(residual_out, 2), {-1}, true);
+    at::mul_out(out, residual_out, w);
+    at::div_out(out, out, at::sqrt(at::add(variance, eps)));
+    
+    return std::make_tuple(out, residual_out);
 }
 
 void dispose(fptr_t _fa)

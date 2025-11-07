@@ -371,6 +371,46 @@ class CustomAllreduce:
         else:
             return self.fused_ar_rms(input, w=weight, eps=eps, registered=False)
 
+    def fused_ar_residual_rms(
+        self,
+        inp: torch.Tensor,
+        residual: torch.Tensor,
+        w: torch.Tensor,
+        eps: float,
+        registered: bool = False,
+    ):
+        # Call the new function that returns a tuple
+        return ops.fused_allreduce_residual_rmsnorm(
+            self._ptr,
+            inp,
+            residual,
+            w,
+            eps,
+            None if registered else self.buffer,
+        )
+
+    def custom_fused_ar_residual_rms(
+        self, input: torch.Tensor, residual: torch.Tensor, weight: torch.Tensor, eps: float
+    ) -> Optional[tuple[torch.Tensor, torch.Tensor]]:
+        # when custom allreduce is disabled, this will be None
+        if self.disabled or not self.should_custom_ar(input):
+            return None
+        if self._IS_CAPTURING:
+            if torch.cuda.is_current_stream_capturing():
+                return self.fused_ar_residual_rms(input, residual, w=weight, eps=eps, registered=True)
+            else:
+                return torch.empty_like(input), torch.empty_like(residual)
+        else:
+            # Call the new function that returns a tuple
+            return ops.fused_allreduce_residual_rmsnorm(
+                self._ptr,
+                input,
+                residual,
+                weight,
+                eps,
+                self.buffer,
+            )
+
     def close(self):
         if not self.disabled and self._ptr:
             ops.dispose(self._ptr)

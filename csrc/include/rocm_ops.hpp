@@ -285,9 +285,20 @@
           py::arg("reg_buffer") = std::nullopt);                                               \
     m.def("fused_allreduce_rmsnorm",                                                           \
           &aiter::fused_allreduce_rmsnorm,                                                     \
+          "fused_allreduce_rmsnorm(int fa, Tensor inp, Tensor w, float eps, "                  \
+          "std::optional<Tensor> reg_buffer) -> (Tensor, Tensor)",                            \
           py::arg("_fa"),                                                                      \
           py::arg("inp"),                                                                      \
-          py::arg("out"),                                                                      \
+          py::arg("w"),                                                                        \
+          py::arg("eps"),                                                                      \
+          py::arg("reg_buffer") = std::nullopt);                                               \
+    m.def("fused_allreduce_residual_rmsnorm",                                                  \
+          &aiter::fused_allreduce_residual_rmsnorm,                                             \
+          "fused_allreduce_residual_rmsnorm(int fa, Tensor inp, Tensor residual, "             \
+          "Tensor w, float eps, std::optional<Tensor> reg_buffer) -> (Tensor, Tensor)",       \
+          py::arg("_fa"),                                                                      \
+          py::arg("inp"),                                                                      \
+          py::arg("residual"),                                                                 \
           py::arg("w"),                                                                        \
           py::arg("eps"),                                                                      \
           py::arg("reg_buffer") = std::nullopt);                                               \
