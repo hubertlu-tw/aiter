@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (C) 2024-2025, Advanced Micro Devices, Inc. All rights reserved.
 
-import math
 import triton
 import triton.language as tl
 
@@ -227,6 +226,7 @@ def _deepgemm_fp8_paged_mqa_logits_stage1(
     ChunkQ: tl.constexpr,
     ChunkK: tl.constexpr,
     HiddenDim: tl.constexpr,
+    KVBlockSize: tl.constexpr = 1,
     SplitKV: tl.constexpr = 1,
 ):
     pid = tl.program_id(0)
@@ -263,9 +263,12 @@ def _deepgemm_fp8_paged_mqa_logits_stage1(
     for context_idx in range(
         split_context_start, split_context_start + split_context_length, ChunkK
     ):
-        mask_kv = context_idx + tl.arange(0, ChunkK) < context_length
+        token_pos = context_idx + tl.arange(0, ChunkK)
+        mask_kv = token_pos < context_length
+        page_idx = token_pos // KVBlockSize
+        token_offset_in_page = token_pos % KVBlockSize
         context_kv_idx = tl.load(
-            kv_indices + pid_batch * max_blk_len + context_idx + tl.arange(0, ChunkK),
+            kv_indices + pid_batch * max_blk_len + page_idx,
             mask=mask_kv,
             other=0,
         )
@@ -273,14 +276,19 @@ def _deepgemm_fp8_paged_mqa_logits_stage1(
         k = tl.load(
             KV_buffer
             + context_kv_idx[:, None] * stride_k_seq
+            + token_offset_in_page[:, None] * HiddenDim
             + tl.arange(0, HiddenDim)[None, :],
             mask=mask_kv[:, None],
             other=0.0,
         )
-        k_scale_f = tl.load(scale_buffer + context_kv_idx[:, None] * stride_scale_seq)
+        k_scale_f = tl.load(
+            scale_buffer + context_kv_idx * stride_scale_seq + token_offset_in_page,
+            mask=mask_kv,
+            other=0.0,
+        )
 
         o = tl.dot(q, k.T)
-        o = o * k_scale_f.T
+        o = o * k_scale_f[None, :]
         o = tl.maximum(o, 0.0)
         o = o * scale_weight[None, :].T
 
@@ -369,6 +377,7 @@ def _deepgemm_fp8_paged_mqa_logits(
     ChunkQ: tl.constexpr,
     ChunkK: tl.constexpr,
     HiddenDim: tl.constexpr,
+    KVBlockSize: tl.constexpr = 1,
     SplitKV: tl.constexpr = 1,
 ):
     pid = tl.program_id(0)
@@ -405,9 +414,12 @@ def _deepgemm_fp8_paged_mqa_logits(
     for context_idx in range(
         split_context_start, split_context_start + split_context_length, ChunkK
     ):
-        mask_kv = context_idx + tl.arange(0, ChunkK) < context_length
+        token_pos = context_idx + tl.arange(0, ChunkK)
+        mask_kv = token_pos < context_length
+        page_idx = token_pos // KVBlockSize
+        token_offset_in_page = token_pos % KVBlockSize
         context_kv_idx = tl.load(
-            kv_indices + pid_batch * max_blk_len + context_idx + tl.arange(0, ChunkK),
+            kv_indices + pid_batch * max_blk_len + page_idx,
             mask=mask_kv,
             other=0,
         )
@@ -415,14 +427,19 @@ def _deepgemm_fp8_paged_mqa_logits(
         k = tl.load(
             KV_buffer
             + context_kv_idx[:, None] * stride_k_seq
+            + token_offset_in_page[:, None] * HiddenDim
             + tl.arange(0, HiddenDim)[None, :],
             mask=mask_kv[:, None],
             other=0.0,
         )
-        k_scale_f = tl.load(scale_buffer + context_kv_idx[:, None] * stride_scale_seq)
+        k_scale_f = tl.load(
+            scale_buffer + context_kv_idx * stride_scale_seq + token_offset_in_page,
+            mask=mask_kv,
+            other=0.0,
+        )
 
         o = tl.dot(q, k.T)
-        o = o * k_scale_f.T
+        o = o * k_scale_f[None, :]
         o = tl.maximum(o, 0.0)
         o = o * scale_weight[None, :].T
 

@@ -534,7 +534,6 @@ def deepgemm_fp8_paged_mqa_logits(
                 hidden_dim,
             )
     else:
-        assert KVBlockSize == 1
         assert not Preshuffle, "Preshuffle mode is only supported on gluon kernel."
         kernel = _deepgemm_fp8_paged_mqa_logits[grid](
             batch_size,
@@ -561,5 +560,6 @@ def deepgemm_fp8_paged_mqa_logits(
             ChunkK=ChunkK,
             SplitKV=SplitKV,
             HiddenDim=hidden_dim,
+            KVBlockSize=KVBlockSize,
         )
     return triton.runtime.cache.get_cache_manager(kernel.hash).key
